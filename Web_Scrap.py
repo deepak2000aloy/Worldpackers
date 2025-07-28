@@ -11,17 +11,17 @@ from psycopg2 import sql
 
 max_pages = 150
 
-# Setup Chrome options
+
 options = uc.ChromeOptions()
 options.headless = False
 options.add_argument("--start-maximized")
 options.add_argument("--disable-blink-features=AutomationControlled")
 
-# Launch driver
+
 driver = uc.Chrome(options=options)
 driver.get("https://www.worldpackers.com/search/asia?q=asia")
 
-# === Accept cookie popup if visible ===
+
 try:
     cookie_button = WebDriverWait(driver, 5).until(
         EC.element_to_be_clickable((By.ID, "onetrust-accept-btn-handler"))
@@ -38,7 +38,7 @@ page = 1
 while page <= max_pages:
     print(f"\n Scraping page {page}...")
 
-    # Wait for cards to load
+    
     WebDriverWait(driver, 20).until(
         EC.presence_of_element_located((By.CSS_SELECTOR, "a.main-thumb.vp-card.block"))
     )
