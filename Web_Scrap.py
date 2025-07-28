@@ -5,20 +5,25 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import ElementClickInterceptedException, TimeoutException
 import time
-import csv
 import psycopg2
 from psycopg2 import sql
 
-max_pages = 150
+
+max_pages = 160 
+PG_HOST = 'localhost'
+PG_PORT = 5432
+PG_DB = 'ARTHA'
+PG_USER = 'postgres'
+PG_PASS = ''
+
 
 
 options = uc.ChromeOptions()
 options.headless = False
 options.add_argument("--start-maximized")
 options.add_argument("--disable-blink-features=AutomationControlled")
-
-
 driver = uc.Chrome(options=options)
+
 driver.get("https://www.worldpackers.com/search/asia?q=asia")
 
 
@@ -38,24 +43,20 @@ page = 1
 while page <= max_pages:
     print(f"\n Scraping page {page}...")
 
-    
     WebDriverWait(driver, 20).until(
         EC.presence_of_element_located((By.CSS_SELECTOR, "a.main-thumb.vp-card.block"))
     )
 
-    #  Scroll 
+    # Scroll 
     scroll_pause_time = 1
     screen_height = driver.execute_script("return window.screen.height;")
     scroll_height = driver.execute_script("return document.body.scrollHeight;")
-
     for i in range(1, scroll_height // screen_height + 2):
         driver.execute_script(f"window.scrollTo(0, {i * screen_height});")
         time.sleep(scroll_pause_time)
 
     soup = BeautifulSoup(driver.page_source, 'html.parser')
     cards = soup.find_all('a', {'class': 'main-thumb vp-card block'})
-
-
 
     for card in cards:
         link = card['href'] if card.has_attr('href') else None
@@ -67,7 +68,6 @@ while page <= max_pages:
         img_tag = card.find('img', {'class': 'b-lazy vp_photo b-loaded'})
         img = img_tag['src'] if img_tag and img_tag.has_attr('src') else (
             img_tag['data-src'] if img_tag and img_tag.has_attr('data-src') else "No Image")
-
 
         host_type = location = volunteering_work = working_hours = minimum_day = accommodation = food = "None"
 
@@ -100,48 +100,78 @@ while page <= max_pages:
         rating_tag = card.find('li', {'class': 'orange'})
         rating = rating_tag.text.strip() if rating_tag else "None"
 
-        print(f"{listing_id} {title} | {host_type} | {location} | {volunteering_work} | {working_hours} | {minimum_day} | {accommodation} | {food} | {rating} | {img}")
-        all_data.append([listing_id,title, host_type, location, volunteering_work, working_hours, minimum_day, accommodation, food, rating, img])
+        all_data.append([
+            listing_id, title, host_type, location, volunteering_work,
+            working_hours, minimum_day, accommodation, food, rating, img
+        ])
 
-    # Move to next page if not on last
+    # Go to next page
     if page < max_pages:
         try:
             next_button = WebDriverWait(driver, 20).until(
                 EC.element_to_be_clickable((By.XPATH, '//a[@rel="next"]'))
             )
-            # Scroll into view in case of obstruction
             driver.execute_script("arguments[0].scrollIntoView(true);", next_button)
             time.sleep(1)
             try:
                 next_button.click()
             except ElementClickInterceptedException:
-                print("Element blocked! Trying JavaScript click...")
+                print(" Element blocked! Using JS click...")
                 driver.execute_script("arguments[0].click();", next_button)
             page += 1
             time.sleep(5)
         except TimeoutException:
-            print(" Next button not found")
+            print(" No next button")
             break
     else:
         break
 
 driver.quit()
-print(f"\n Done scraping {len(all_data)} listings across {page} pages.")
+print(f"\n Scraping done. {len(all_data)} listings collected.")
 
-csv_file = "worldpackers_data.csv"
-with open(csv_file, mode="w", newline="", encoding="utf-8") as file:
-    writer = csv.writer(file)
-    writer.writerow(["listing id"
-        "Title", "Host Type", "Location", "Volunteering Work",
-        "Working Hours", "Minimum Stay", "Accommodation", "Food", "Rating" , "Image"
-    ])
-    writer.writerows(all_data)
 
-print(f"\n Done scraping {len(all_data)} listings across {page} pages.")
-print(f" Data exported to {csv_file}")
+# Insert into PostgreSQL
+def insert_data_into_postgres(data):
+    global cursor, conn
+    try:
+        conn = psycopg2.connect(
+            host=PG_HOST,
+            port=PG_PORT,
+            dbname=PG_DB,
+            user=PG_USER,
+            password=PG_PASS
+        )
+        cursor = conn.cursor()
 
-PG_HOST = 'localhost'
-PG_PORT = 5432
-PG_DB = 'worldpackers_db'
-PG_USER = 'your_pg_user'
-PG_PASS = 'your_pg_password'
+        insert_query = sql.SQL("\n"
+                               "            INSERT INTO worldpackers (\n"
+                               "                listing_id, title, host_type, location, volunteering_work, working_hours,\n"
+                               "                minimum_stay, accommodation, food, rating, image_url\n"
+                               "            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)\n"
+                               "            ON CONFLICT (listing_id) DO UPDATE SET\n"
+                               "                title = EXCLUDED.title,\n"
+                               "                host_type = EXCLUDED.host_type,\n"
+                               "                location = EXCLUDED.location,\n"
+                               "                volunteering_work = EXCLUDED.volunteering_work,\n"
+                               "                working_hours = EXCLUDED.working_hours,\n"
+                               "                minimum_stay = EXCLUDED.minimum_stay,\n"
+                               "                accommodation = EXCLUDED.accommodation,\n"
+                               "                food = EXCLUDED.food,\n"
+                               "                rating = EXCLUDED.rating,\n"
+                               "                image_url = EXCLUDED.image_url;\n"
+                               "        ")
+
+        cursor.executemany(insert_query, data)
+        conn.commit()
+        print(f"Inserted/Updated {cursor.rowcount} rows into PostgreSQL.")
+
+    except Exception as e:
+        print(f" Database error: {e}")
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+
+insert_data_into_postgres(all_data)
